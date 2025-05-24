@@ -1,364 +1,394 @@
 import SwiftUI
 import MapKit
 
-struct GameLocation: Identifiable {
-    let id = UUID()
-    let name: String
-    let coordinate: CLLocationCoordinate2D
-    let description: String
-    let key: String // 對應解鎖條件，例如 "library", "tian" 等
+// MARK: - 道具／信物
+
+enum Item: String, CaseIterable, Identifiable, Hashable {
+    // 行進順序：圖書館→德田館→新體→活大→天文數學館→傅鐘
+    case libraryNote       // 從總圖三樓取得的紙條
+    case squashRacket      // 德田館取得
+    case mcdCoupon         // 新體骰子勝利取得
+    case decryptionKey     // 活大幫老人後取得
+    case fuBellClue        // 天文數學館輸入 FUBELL 後取得（提示）
+    case fuBellToken       // 傅鐘答題正確後取得（最後信物）
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .libraryNote:   return "紙條線索"
+        case .squashRacket:  return "壁球拍"
+        case .mcdCoupon:     return "麥當勞優惠券"
+        case .decryptionKey: return "密鑰 d=3"
+        case .fuBellClue:    return "FUBELL 提示"
+        case .fuBellToken:   return "傅鐘咒物"
+        }
+    }
 }
 
-enum CurrentScene {
-    case login, storyIntro, map, libraryExplore, tianHallPuzzle
+// MARK: - 校園座標 / 地點
+
+struct NTULocation: Identifiable {
+    enum Kind: String, CaseIterable, Identifiable, Hashable {
+        case library, powerPlant, sportsCenter, activityCenter, astronomyMath, fuBell, lakePavilion, freshmanCenter
+        var id: Self { self }
+    }
+
+    var id: Kind
+    var name: String
+    var coordinate: CLLocationCoordinate2D
 }
 
-enum LibraryStage: String, CaseIterable {
-    case basement, firstFloor, secondFloor, thirdFloor, hintFound
+// `CLLocationCoordinate2D` 並未遵循 `Hashable`，因此自訂 `Equatable` / `Hashable` 只比對 id
+extension NTULocation: Equatable {
+    static func == (lhs: NTULocation, rhs: NTULocation) -> Bool { lhs.id == rhs.id }
 }
+extension NTULocation: Hashable {
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+// MARK: - 遊戲狀態
 
 class GameState: ObservableObject {
-    @Published var username: String = ""
-    @Published var currentScene: CurrentScene = .login
-    @Published var unlocked: Set<String> = ["library"]
-    @Published var inventory: [String] = []
-    @Published var libraryStage: LibraryStage = .basement
-    @Published var libraryExplored: Set<LibraryStage> = []
-    @Published var tianPuzzleAnswered: Bool = false
-    @Published var playerPosition: CLLocationCoordinate2D = CLLocationCoordinate2D(latitude: 25.01738, longitude: 121.5405)
+    @Published var inventory: Set<Item> = []            // 已取得道具
+    @Published var summonCompleted = false              // 是否已在湖心亭完成召喚
 
+    private let tokensForSummon: [Item] = [.libraryNote, .squashRacket, .mcdCoupon, .decryptionKey, .fuBellToken]
 
-    func isUnlocked(_ key: String) -> Bool {
-        unlocked.contains(key)
-    }
-    func unlock(_ key: String) {
-        unlocked.insert(key)
-    }
-    func hasItem(_ item: String) -> Bool {
-        inventory.contains(item)
+    func hasAllTokens() -> Bool {
+        tokensForSummon.allSatisfy(inventory.contains)
     }
 }
+
+// MARK: - App 入口
 
 struct ContentView: View {
-    @StateObject var gameState = GameState()
+    @StateObject private var game = GameState()
+    @State private var showStory = false
 
     var body: some View {
-        switch gameState.currentScene {
-        case .login:
-            LoginView().environmentObject(gameState)
-        case .storyIntro:
-            StoryIntroView().environmentObject(gameState)
-        case .map:
-            MapSceneView().environmentObject(gameState)
-        case .libraryExplore:
-            LibraryExploreView().environmentObject(gameState)
-        case .tianHallPuzzle:
-            TianHallPuzzleView().environmentObject(gameState)
-        }
-    }
-}
-
-struct LoginView: View {
-    @EnvironmentObject var gameState: GameState
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("🎓 台大新生實境解謎")
-                .font(.largeTitle)
-            TextField("請輸入暱稱", text: $gameState.username)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .padding()
-            Button("開始遊戲") {
-                gameState.currentScene = .storyIntro
+        NavigationStack {
+            VStack(spacing: 24) {
+                Spacer()
+                Image("library")
+                    .resizable()
+                    .frame(width: 300, height: 300)
+                Text("NTU Puzzle Adventure")
+                    .font(.largeTitle.bold())
+                Text("點擊開始，展開你的臺大解謎之旅")
+                    .multilineTextAlignment(.center)
+                Button("開始遊戲") { showStory = true }
+                    .buttonStyle(.borderedProminent)
+                Spacer()
             }
-            .padding()
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(10)
+            .navigationDestination(isPresented: $showStory) {
+                StoryIntroView().environmentObject(game)
+            }
         }
-        .padding()
     }
 }
 
 struct StoryIntroView: View {
-    @EnvironmentObject var gameState: GameState
+    @EnvironmentObject var game: GameState
+    @State private var goMap = false
+
     var body: some View {
-        VStack(spacing: 20) {
-            Text("\(gameState.username) 同學，歡迎來到台大！")
-                .font(.title2)
-            Text("你是一名新生，想獲得真正的入場券，請從總圖開始探索。")
-                .padding()
-            Button("前往地圖") {
-                gameState.currentScene = .map
-            }
-            .padding()
-            .background(Color.green)
-            .foregroundColor(.white)
-            .cornerRadius(10)
+        VStack(alignment: .leading, spacing: 16) {
+//            ScrollView {
+//                Text("""
+//你是一位即將成為臺大人的新生，但你尚未取得入學證明。如果在開學前拿不到入學證明，你將失去入學資格！
+//
+//神秘之音：「去找吧！我把所有入學證明都藏那裡！」
+//
+//你茫然地站在校門口，只能先去總圖看看......
+//""")
+//            }
+            Image("introduction")
+                .resizable()
+                .frame(width: 400, height: 400)
+            Button("前往總圖") { goMap = true }
+                .buttonStyle(.borderedProminent)
         }
         .padding()
+        .navigationDestination(isPresented: $goMap) {
+            MapView().environmentObject(game)
+        }
     }
 }
 
-struct MapSceneView: View {
-    @EnvironmentObject var gameState: GameState
-    @State private var selectedLocation: GameLocation? = nil
-    @State private var isMoving = false
 
-    let locations: [GameLocation] = [
-        GameLocation(name: "總圖書館", coordinate: CLLocationCoordinate2D(latitude: 25.01738, longitude: 121.5405), description: "探索書海的起點。", key: "library"),
-        GameLocation(name: "德田館", coordinate: CLLocationCoordinate2D(latitude: 25.01941, longitude: 121.54146), description: "電神聚集之地。", key: "tian")
+// MARK: - 地圖
+fileprivate var starOverlay: MKPolyline {
+    let coords = [
+        CLLocationCoordinate2D(latitude: 25.019413171057344, longitude: 121.54146077741073), // 德田館
+        CLLocationCoordinate2D(latitude: 25.017747006918007, longitude: 121.54009100247073), // 活大
+        CLLocationCoordinate2D(latitude: 25.017148824993487, longitude: 121.53675931382348), // 傅鐘
+        CLLocationCoordinate2D(latitude: 25.02145867241166,  longitude: 121.5352765185534),  // 新體
+        CLLocationCoordinate2D(latitude: 25.021165836401224, longitude: 121.5380799500072),  // 天文數學館
+        CLLocationCoordinate2D(latitude: 25.019413171057344, longitude: 121.54146077741073)  // 回德田館
+    ]
+    return MKPolyline(coordinates: coords, count: coords.count)
+}
+
+
+//struct MapView: View {
+//    @EnvironmentObject var game: GameState
+//
+//    @State private var region = MKCoordinateRegion(
+//        center: CLLocationCoordinate2D(latitude: 25.0182, longitude: 121.5395),
+//        span: MKCoordinateSpan(latitudeDelta: 0.006, longitudeDelta: 0.006)
+//    )
+//    @State private var selected: NTULocation?
+//
+//    private let locations: [NTULocation] = [
+//        NTULocation(id: .library,          name: "臺大圖書館",     coordinate: .init(latitude: 25.01738368914369, longitude: 121.54050473271329)),
+//        NTULocation(id: .powerPlant,       name: "德田館",         coordinate: .init(latitude: 25.019413171057344, longitude: 121.54146077741073)),
+//        NTULocation(id: .sportsCenter,     name: "新體",           coordinate: .init(latitude: 25.02145867241166, longitude: 121.5352765185534)),
+//        NTULocation(id: .activityCenter,   name: "活大",           coordinate: .init(latitude: 25.017747006918007, longitude: 121.54009100247073)),
+//        NTULocation(id: .astronomyMath,    name: "天文數學館",     coordinate: .init(latitude: 25.021165836401224, longitude:  121.5380799500072)),
+//        NTULocation(id: .fuBell,           name: "傅鐘",           coordinate: .init(latitude: 25.017148824993487, longitude: 121.53675931382348)),
+//        NTULocation(id: .lakePavilion,     name: "醉月湖心亭",     coordinate: .init(latitude: 25.020413267215982, longitude: 121.53762270312905)),
+//        NTULocation(id: .freshmanCenter,   name: "新生教學館",     coordinate: .init(latitude: 25.019715897298074, longitude:  121.53844525959417))
+//    ]
+//
+//    var body: some View {
+//        ZStack {
+//            Map(coordinateRegion: $region, annotationItems: locations) { loc in
+//                // iOS17 建議使用 `Annotation`; 這裡為了簡潔仍用 MapAnnotation，僅出現警告
+//                MapAnnotation(coordinate: loc.coordinate) {
+//                    Button { selected = loc } label: {
+//                        Image(systemName: "mappin.circle.fill")
+//                            .font(.title)
+//                            .foregroundColor(loc.id == .freshmanCenter && game.summonCompleted ? .yellow : .red)
+//                    }
+//                }
+//            }
+//
+//            VStack {
+//                Spacer()
+//                HStack {
+//                    Spacer()
+//                    InventoryView().environmentObject(game).padding()
+//                }
+//            }
+//        }
+//        .sheet(item: $selected) { LocationRouterView(location: $0).environmentObject(game) }
+//        .onChange(of: game.summonCompleted) { done in
+//            guard done, let freshman = locations.first(where: { $0.id == .freshmanCenter }) else { return }
+//            region.center = freshman.coordinate
+//        }
+//        .navigationTitle("臺大地圖探索")
+//        .navigationBarTitleDisplayMode(.inline)
+//    }
+//}
+
+struct InventoryView: View {
+    @EnvironmentObject var game: GameState
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text("背包").bold()
+            ForEach(Array(game.inventory)) { item in
+                Text(item.displayName).font(.caption)
+            }
+        }
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Location Router
+
+struct LocationRouterView: View {
+    let location: NTULocation
+    @EnvironmentObject var game: GameState
+
+    var body: some View {
+        switch location.id {
+        case .library:         LibraryView()
+        case .powerPlant:      PowerPlantView()
+        case .sportsCenter:    SportsCenterView()
+        case .activityCenter:  ActivityCenterView()
+        case .astronomyMath:   AstronomyMathView()
+        case .fuBell:          FuBellView()
+        case .lakePavilion:    LakePavilionView()
+        case .freshmanCenter:  FreshmanCenterView()
+        }
+    }
+}
+
+
+struct MapView: View {
+    @EnvironmentObject var game: GameState
+    @State private var selected: NTULocation?
+
+    private let locations: [NTULocation] = [
+        NTULocation(id: .library,        name: "臺大圖書館",   coordinate: .init(latitude: 25.01738368914369, longitude: 121.54050473271329)),
+        NTULocation(id: .powerPlant,     name: "德田館",       coordinate: .init(latitude: 25.019413171057344, longitude: 121.54146077741073)),
+        NTULocation(id: .sportsCenter,   name: "新體",         coordinate: .init(latitude: 25.02145867241166, longitude: 121.5352765185534)),
+        NTULocation(id: .activityCenter, name: "活大",         coordinate: .init(latitude: 25.017747006918007, longitude: 121.54009100247073)),
+        NTULocation(id: .astronomyMath,  name: "天文數學館",   coordinate: .init(latitude: 25.021165836401224, longitude:  121.5380799500072)),
+        NTULocation(id: .fuBell,         name: "傅鐘",         coordinate: .init(latitude: 25.017148824993487, longitude: 121.53675931382348)),
+        NTULocation(id: .lakePavilion,   name: "醉月湖心亭",   coordinate: .init(latitude: 25.020413267215982, longitude: 121.53762270312905)),
+        NTULocation(id: .freshmanCenter, name: "新生教學館",   coordinate: .init(latitude: 25.019715897298074, longitude:  121.53844525959417))
     ]
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            MapReader(
-                locations: locations,
-                selectedLocation: $selectedLocation,
-                characterPosition: $gameState.playerPosition, // ✅ 從 gameState 傳入 Binding
-                isMoving: $isMoving
-            )
-            if let location = selectedLocation {
-                LocationDialog(location: location, show: $selectedLocation)
-            }
+        ZStack {
+            UIKitMapView(game: game, locations: locations, selected: $selected)
+                .ignoresSafeArea()
 
-            if !gameState.inventory.isEmpty {
-                VStack(alignment: .trailing) {
-                    Text("🎒 背包：")
-                        .font(.caption)
-                        .bold()
-                    ForEach(gameState.inventory, id: \.self) { item in
-                        Text("• \(item)")
-                            .font(.caption2)
-                    }
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    InventoryView().environmentObject(game).padding()
                 }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(10)
-                .padding()
             }
         }
+        .sheet(item: $selected) {
+            LocationRouterView(location: $0).environmentObject(game)
+        }
+        .navigationTitle("臺大地圖探索")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
+struct UIKitMapView: UIViewRepresentable {
+    let game: GameState
+    let locations: [NTULocation]
+    @Binding var selected: NTULocation?
 
+    func makeUIView(context: Context) -> MKMapView {
+        let map = MKMapView()
+        map.delegate = context.coordinator
 
-// MapReader 加上角色圖示與動畫控制
-struct MapReader: View {
-    let locations: [GameLocation]
-    @EnvironmentObject var gameState: GameState
-    @Binding var selectedLocation: GameLocation?
-    @Binding var characterPosition: CLLocationCoordinate2D
-    @Binding var isMoving: Bool
-
-    @State private var position = MapCameraPosition.region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 25.0173, longitude: 121.5395),
-            span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 25.0182, longitude: 121.5395),
+            span: MKCoordinateSpan(latitudeDelta: 0.006, longitudeDelta: 0.006)
         )
-    )
+        map.setRegion(region, animated: false)
 
-    var body: some View {
-        Map(position: $position) {
-            // 地點標記
-            ForEach(locations) { location in
-                Annotation(location.name, coordinate: location.coordinate) {
-                    Button {
-                        if gameState.isUnlocked(location.key) {
-                            isMoving = true
-                            withAnimation(.easeInOut(duration: 1.2)) {
-                                characterPosition = location.coordinate
-                            }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
-                                selectedLocation = location
-                                isMoving = false
-                            }
-                        }
-                    } label: {
-                        Image(systemName: gameState.isUnlocked(location.key) ? "mappin.circle.fill" : "lock.circle")
-                            .font(.title)
-                            .foregroundColor(gameState.isUnlocked(location.key) ? .blue : .gray)
-                    }
-                }
-            }
+        for loc in locations {
+            let annotation = MKPointAnnotation()
+            annotation.title = loc.id.rawValue
+            annotation.coordinate = loc.coordinate
+            map.addAnnotation(annotation)
+        }
 
-            // 角色圖示
-            Annotation("Player", coordinate: characterPosition) {
-                Image(systemName: "figure.walk.circle.fill")
-                    .resizable()
-                    .frame(width: 30, height: 30)
-                    .foregroundColor(.red)
-                    .scaleEffect(isMoving ? 1.2 : 1.0)
-                    .shadow(radius: 3)
-                    .animation(.easeInOut(duration: 0.5), value: isMoving)
+        return map
+    }
+
+    func updateUIView(_ mapView: MKMapView, context: Context) {
+        mapView.removeOverlays(mapView.overlays)
+
+        if game.summonCompleted {
+            let coords: [CLLocationCoordinate2D] = [
+                CLLocationCoordinate2D(latitude: 25.019413171057344, longitude: 121.54146077741073),
+                CLLocationCoordinate2D(latitude: 25.02145867241166,  longitude: 121.5352765185534),
+                CLLocationCoordinate2D(latitude: 25.017747006918007, longitude: 121.54009100247073),
+                CLLocationCoordinate2D(latitude: 25.021165836401224, longitude: 121.5380799500072),
+                CLLocationCoordinate2D(latitude: 25.017148824993487, longitude: 121.53675931382348),
+                CLLocationCoordinate2D(latitude: 25.019413171057344, longitude: 121.54146077741073)
+            ]
+            let polyline = MKPolyline(coordinates: coords, count: coords.count)
+            mapView.addOverlay(polyline)
+        }
+
+        // ✅ 強制刷新圖標顏色
+        mapView.annotations.forEach { annotation in
+            if let view = mapView.view(for: annotation) {
+                let isFreshman = annotation.title == NTULocation.Kind.freshmanCenter.rawValue
+                view.image = coloredPinImage(color: isFreshman && game.summonCompleted ? UIColor.systemYellow : UIColor.systemRed)
             }
         }
-        .edgesIgnoringSafeArea(.all)
     }
-}
 
 
 
-struct LocationDialog: View {
-    let location: GameLocation
-    @EnvironmentObject var gameState: GameState
-    @Binding var show: GameLocation?
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
-    var body: some View {
-        VStack(spacing: 12) {
-            Text(location.name)
-                .font(.headline)
-            Text(location.description)
-            if gameState.isUnlocked(location.key) {
-                Button("進入") {
-                    show = nil
-                    if location.key == "library" {
-                        gameState.libraryStage = .basement
-                        gameState.libraryExplored = []
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            gameState.currentScene = .libraryExplore
-                        }
-                    } else if location.key == "tian" {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            gameState.currentScene = .tianHallPuzzle
-                        }
-                    }
-                }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
+    class Coordinator: NSObject, MKMapViewDelegate {
+        let parent: UIKitMapView
+
+        init(_ parent: UIKitMapView) {
+            self.parent = parent
+        }
+
+        func coloredPinImage(color: UIColor) -> UIImage {
+            let config = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
+            guard let base = UIImage(systemName: "mappin.circle.fill", withConfiguration: config)?
+                    .withRenderingMode(.alwaysTemplate) else {
+                return UIImage()
+            }
+
+            let size = CGSize(width: 40, height: 40)
+            let renderer = UIGraphicsImageRenderer(size: size)
+            return renderer.image { context in
+                color.set()
+                base.draw(in: CGRect(origin: .zero, size: size))
+            }
+        }
+
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let idRaw = annotation.title ?? nil,
+                  let loc = parent.locations.first(where: { $0.id.rawValue == idRaw }) else { return nil }
+
+            let identifier = "pin"
+            var view = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
+            if view == nil {
+                view = MKAnnotationView(annotation: annotation, reuseIdentifier: identifier)
+                view?.canShowCallout = false
+                view?.frame.size = CGSize(width: 32, height: 32)
             } else {
-                Text("目前尚未解鎖")
-                    .foregroundColor(.gray)
+                view?.annotation = annotation
             }
-            Button("關閉") {
-                show = nil
-            }
+
+            let color: UIColor = (loc.id == .freshmanCenter && parent.game.summonCompleted) ? .systemYellow : .systemRed
+            view?.image = coloredPinImage(color: color)
+            view?.tintColor = .clear
+
+            return view
         }
-        .padding()
-        .background(.white)
-        .cornerRadius(16)
-        .shadow(radius: 10)
-        .padding()
-    }
-}
 
-struct LibraryExploreView: View {
-    @EnvironmentObject var gameState: GameState
-
-    func explore(_ stage: LibraryStage) {
-        gameState.libraryStage = stage
-        gameState.libraryExplored.insert(stage)
-        if stage == .thirdFloor {
-            gameState.libraryStage = .hintFound
-            gameState.unlock("tian")
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("📚 總圖探索 - 選擇樓層")
-                .font(.headline)
-            ForEach(LibraryStage.allCases.filter { $0 != .hintFound }, id: \ .self) { stage in
-                Button("探索 \(floorName(for: stage))") {
-                    explore(stage)
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color.gray.opacity(0.2))
-                .cornerRadius(10)
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = UIColor.systemPink
+                renderer.lineWidth = 4
+                return renderer
             }
-
-            Divider()
-            if let output = narrative(for: gameState.libraryStage) {
-                Text(output)
-                    .padding()
-            }
-
-            if gameState.libraryStage == .hintFound {
-                Button("回到地圖") {
-                    gameState.currentScene = .map
-                }
-                .padding()
-                .background(Color.orange)
-                .foregroundColor(.white)
-                .cornerRadius(10)
-            }
+            return MKOverlayRenderer()
         }
-        .padding()
-    }
 
-    func floorName(for stage: LibraryStage) -> String {
-        switch stage {
-        case .basement: return "地下室"
-        case .firstFloor: return "一樓"
-        case .secondFloor: return "二樓"
-        case .thirdFloor: return "三樓"
-        case .hintFound: return "完成探索"
-        }
-    }
-
-    func narrative(for stage: LibraryStage) -> String? {
-        switch stage {
-        case .basement: return "你走進地下室，燈火通明但空無一人。"
-        case .firstFloor: return "一樓擺滿書桌，但似乎沒有任何線索。"
-        case .secondFloor: return "書堆凌亂，但一無所獲。"
-        case .thirdFloor: return "你在書架後方發現一張泛黃紙條，上面寫著：電神之地，藏著前進的鑰匙。"
-        case .hintFound: return "你已發現前往德田館的線索！"
+        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            guard let idRaw = view.annotation?.title ?? nil,
+                  let loc = parent.locations.first(where: { $0.id.rawValue == idRaw }) else { return }
+            parent.selected = loc
         }
     }
 }
 
-struct TianHallPuzzleView: View {
-    @EnvironmentObject var gameState: GameState
-    @State private var selectedAnswer: String? = nil
-    @State private var showResult = false
+func coloredPinImage(color: UIColor) -> UIImage {
+    let config = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
+    guard let base = UIImage(systemName: "mappin.circle.fill", withConfiguration: config)?
+        .withRenderingMode(.alwaysTemplate) else {
+        return UIImage()
+    }
 
-    let question = "以下何者為『非監督式學習』？"
-    let options = ["k-means", "decision tree", "xgboost", "logistic regression"]
-    let correct = "k-means"
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("⚡ 德田館 - 電神之地")
-                .font(.headline)
-            Text("你來到103教室的講桌前，發現一張卡片：")
-            Text(question)
-                .bold()
-            ForEach(options, id: \ .self) { opt in
-                Button(opt) {
-                    selectedAnswer = opt
-                    showResult = true
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(opt == selectedAnswer ? Color.blue.opacity(0.6) : Color.gray.opacity(0.2))
-                .cornerRadius(10)
-            }
-
-            if showResult {
-                if selectedAnswer == correct {
-                    Text("✅ 答對了！你發現藏在抽屜的訊息：紅黑樹研究異常，請前往專研樹之地。")
-                        .padding()
-                    Button("回到地圖") {
-                        gameState.tianPuzzleAnswered = true
-                        gameState.currentScene = .map
-                    }
-                    .padding()
-                    .background(Color.green)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                } else {
-                    Text("❌ 錯誤答案，再思考看看！")
-                        .foregroundColor(.red)
-                }
-            }
-        }
-        .padding()
+    let size = CGSize(width: 40, height: 40)
+    let renderer = UIGraphicsImageRenderer(size: size)
+    return renderer.image { context in
+        color.set()
+        base.draw(in: CGRect(origin: .zero, size: size))
     }
 }
 
 
-#Preview{
+
+// MARK: -  Preview
+
+#Preview {
     ContentView()
 }
